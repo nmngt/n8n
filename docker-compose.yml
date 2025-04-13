@@ -1,0 +1,212 @@
+#
+# n8n docker compose by ngt
+#
+volumes:
+  traefik_data:
+    #external: true
+    driver: local
+    driver_opts:
+      o: bind
+      type: none
+      device: /srv/n8n/volumes/traefik
+  n8n_data:
+    driver: local
+    driver_opts:
+      o: bind
+      type: none
+      device: /srv/n8n/volumes/n8n
+  redis_data:
+    driver: local
+    driver_opts:
+      o: bind
+      type: none
+      device: /srv/n8n/volumes/redis
+  postgres_data:
+    driver: local
+    driver_opts:
+      o: bind
+      type: none
+      device: /srv/n8n/volumes/postgres
+networks:
+  frontend:
+    external: true
+  backend:
+    external: false
+  default:
+    driver: bridge
+services:
+  redis:
+    image: redis:latest
+    container_name: redis
+    restart: always
+    volumes:
+      - redis_data:/data
+    networks:
+      - backend
+    healthcheck:
+      test: ['CMD', 'redis-cli', 'ping']
+      interval: 5s
+      timeout: 5s
+      retries: 10
+  postgres:
+    image: postgres:latest
+    container_name: postgres
+    restart: always
+    user: postgres
+    labels:
+      - "traefik.enable=false"
+    environment:
+      - POSTGRES_USER=${POSTGRES_USER}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
+      - POSTGRES_DB=${POSTGRES_DB}
+      - POSTGRES_NON_ROOT_USER=${POSTGRES_NON_ROOT_USER}
+      - POSTGRES_NON_ROOT_PASSWORD=${POSTGRES_NON_ROOT_PASSWORD}
+    ports:
+      - 5432:5432
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./init-data.sh:/docker-entrypoint-initdb.d/init-data.sh
+    networks:
+      - backend
+    security_opt:
+      - no-new-privileges:true
+    healthcheck:
+      #test: ['CMD-SHELL', 'pg_isready -h ${POSTGRES_HOST} -U ${POSTGRES_USER} -d ${POSTGRES_DB}']
+      test: ['CMD-SHELL', 'pg_isready']
+      interval: 5s
+      timeout: 5s
+      retries: 10
+  n8n:
+    image: docker.n8n.io/n8nio/n8n
+    container_name: n8n
+    restart: always
+    user: root
+    ports:
+      #- 5678:5678
+      - "127.0.0.1:5678:5678"
+    networks:
+      - backend
+      - frontend
+    security_opt:
+      - no-new-privileges:true
+    volumes:
+      - n8n_data:/home/node/.n8n
+    labels:
+      - traefik.enable=true
+      - traefik.http.routers.n8n.rule=Host(`${N8N_HOST}`)
+      - traefik.http.routers.n8n.tls=true
+      - traefik.http.routers.n8n.entrypoints=web,websecure
+      - traefik.http.routers.n8n.tls.certresolver=letsencrypt
+      - traefik.http.routers.n8n.middlewares=n8n@docker
+      - traefik.http.routers.n8n.service=n8n-service
+      - traefik.http.services.n8n-service.loadbalancer.server.port=5678
+      - traefik.http.middlewares.n8n.headers.SSLRedirect=true
+      - traefik.http.middlewares.n8n.headers.STSSeconds=315360000
+      - traefik.http.middlewares.n8n.headers.browserXSSFilter=true
+      - traefik.http.middlewares.n8n.headers.contentTypeNosniff=true
+      - traefik.http.middlewares.n8n.headers.forceSTSHeader=true
+      - traefik.http.middlewares.n8n.headers.SSLHost=${N8N_DOMAIN}
+      - traefik.http.middlewares.n8n.headers.STSIncludeSubdomains=true
+      - traefik.http.middlewares.n8n.headers.STSPreload=true
+    environment:
+      - GENERIC_TIMEZONE=Europe/Berlin
+      - TZ=Europe/Berlin
+      # ----- redis 
+      - QUEUE_BULL_REDIS_HOST=redis
+      - QUEUE_HEALTH_CHECK_ACTIVE=true
+      # ----- postgres
+      - DB_TYPE=postgresdb
+      - DB_POSTGRESDB_HOST=${POSTGRES_HOST}
+      - DB_POSTGRESDB_SCHEMA=public
+      - DB_POSTGRESDB_PORT=${POSTGRES_PORT}
+      - DB_POSTGRESDB_DATABASE=${POSTGRES_DB}
+      - DB_POSTGRESDB_USER=${POSTGRES_NON_ROOT_USER}
+      - DB_POSTGRESDB_PASSWORD=${POSTGRES_NON_ROOT_PASSWORD}
+      # ----- n8n
+      - N8N_ENCRYPTION_KEY=${N8N_ENCRYPTION_KEY}
+      - N8N_LICENSE_ACTIVATION_KEY=${N8N_LICENSE_ACTIVATION_KEY}
+      # ----- host-related
+      - N8N_PROTOCOL=${N8N_PROTOCOL}
+      - N8N_HOST=${N8N_HOST}
+      - N8N_PORT=${N8N_PORT}
+      # - N8N_SSL_KEY=/home/node/.n8n/ssl/n8n_key.pem
+      # - N8N_SSL_CERT=/home/node/.n8n/ssl/n8n_fullchain.pem
+      # ----- n8n basic auth
+      # - N8N_BASIC_AUTH_ACTIVE=true
+      # - N8N_BASIC_AUTH_USER=${N8N_BASIC_AUTH_USER}
+      # - N8N_BASIC_AUTH_PASSWORD=${N8N_BASIC_AUTH_PASSWORD}
+      # ----- app options
+      - NODE_ENV=production
+      - N8N_SECURE_COOKIE=true # Activates secure cookies. Set to false to ensures that you can use n8n locally via http:// without an SSL certificate
+      #- N8N_ENFORCE_SETTINGS_FILE_PERMISSIONS=true
+      - WORKFLOWS_DEFAULT_NAME="NGT Workflow"
+      - VUE_APP_URL_BASE_API=https://${N8N_HOST}/
+      - WEBHOOK_TUNNEL_URL=https://${N8N_HOST}/
+      - WEBHOOK_URL=https://${N8N_HOST}/
+      - NODE_FUNCTION_ALLOW_EXTERNAL=axios,qs,cheerio
+      # ----- smtp
+      - N8N_EMAIL_MODE=${N8N_EMAIL_MODE}
+      - N8N_SMTP_SENDER=${N8N_SMTP_SENDER}
+      - N8N_SMTP_SSL=${N8N_SMTP_SSL}
+      - N8N_SMTP_HOST=${N8N_SMTP_HOST}
+      - N8N_SMTP_PORT=${N8N_SMTP_PORT}
+      - N8N_SMTP_USER=${N8N_SMTP_USER}
+      - N8N_SMTP_PASS=${N8N_SMTP_PASS}
+      # ----- debug
+      #- N8N_LOG_LEVEL=debug
+      #- N8N_LOG_OUTPUT=console,file
+      #- N8N_LOG_FILE_LOCATION=logs/n8n.log
+      #- N8N_LOG_FILE_SIZE_MAX=20
+      #- N8N_LOG_FILE_COUNT_MAX=50
+      # ----- optimization
+      # this section reduces the database size and speed up performance 
+      # disable for debug!
+      - EXECUTIONS_DATA_SAVE_ON_ERROR=all
+      - EXECUTIONS_DATA_SAVE_ON_SUCCESS=none
+      - EXECUTIONS_DATA_SAVE_ON_PROGRESS=true
+      - EXECUTIONS_DATA_SAVE_MANUAL_EXECUTIONS=false
+      - EXECUTIONS_DATA_PRUNE=true
+      - EXECUTIONS_DATA_MAX_AGE=336
+      - EXECUTIONS_DATA_PRUNE_MAX_COUNT=50000
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+  traefik:
+    image: traefik:v3.0
+    container_name: traefik
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    ports:
+      - 80:80
+      - 443:443
+      - 8080:8080
+    volumes:
+      - /etc/localtime:/etc/localtime:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - /srv/n8n/volumes/traefik/traefik.yml:/traefik.yml:ro
+      - /srv/n8n/volumes/traefik/acme.json:/acme.json
+      - /srv/n8n/volumes/traefik/configurations:/configurations
+    networks:
+      - frontend
+    labels:
+      - "traefik.enable=true"
+      - "traefik.docker.network=proxy"
+      - "traefik.http.routers.traefik-secure.entrypoints=websecure"
+      - "traefik.http.routers.traefik-secure.rule=Host(`${N8N_HOST}`)" 
+      - "traefik.http.routers.traefik-secure.middlewares=user-auth@file"
+      - "traefik.http.routers.traefik-secure.service=api@internal"
+    command:
+      - "--api=true"
+      - "--api.insecure=true"
+      - "--api.dashboard=false"
+      - "--providers.docker=true"
+      - "--providers.docker.exposedbydefault=false"
+      - "--entrypoints.websecure.address=:443"
+      - "--certificatesresolvers.letsencrypt.acme.tlschallenge=true"
+      - "--certificatesresolvers.letsencrypt.acme.email=${SSL_EMAIL}"
+      - "--certificatesresolvers.letsencrypt.acme.storage=acme.json"
+    environment:
+      - TZ=${TIMEZONE}

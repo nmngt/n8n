@@ -1,0 +1,8 @@
+.env
+____*
+!volumes/traefik/acme.json
+!volumes/traefik/traefik.yml
+!volumes/traefik/configurations/dynamic.yml
+volumes/n8n/*
+volumes/redis/*
+volumes/postgres/*
